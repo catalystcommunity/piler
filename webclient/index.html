@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>piler — web client</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        overflow: hidden; /* the canvas owns the viewport */
+      }
+      #screen {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        image-rendering: pixelated; /* crisp scaling for the tiled look */
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Host shell for the eventual WASM core. The full-window canvas +
+      backing-store resize handling is proven in canvas-test.html; this
+      file is where the real host wiring lands in roadmap step 4:
+        - import init from "./pkg/piler_webclient.js" and init() the wasm
+        - rAF loop: feed input -> core.tick() -> putImageData(framebuffer)
+        - size the backing store in DEVICE pixels (dpr) on resize, and
+          render the framebuffer at backing-store dimensions
+        - open the WebSocket and pump CBOR frames to/from the core
+      Placeholder until then.
+    -->
+    <canvas id="screen"></canvas>
+    <script type="module">
+      // TODO(step 4): replace this placeholder with the wasm host wiring.
+      const canvas = document.getElementById("screen");
+      const ctx = canvas.getContext("2d");
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+      ctx.fillStyle = "#1a1a2e";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#9aa";
+      ctx.font = "14px monospace";
+      ctx.fillText("piler webclient — host shell (no wasm yet)", 16, 28);
+    </script>
+  </body>
+</html>

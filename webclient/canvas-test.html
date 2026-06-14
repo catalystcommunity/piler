@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>piler — full-window canvas resize test</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        overflow: hidden; /* no scrollbars — the canvas owns the viewport */
+      }
+      #screen {
+        display: block;          /* kill the inline baseline gap */
+        width: 100vw;
+        height: 100vh;
+        image-rendering: pixelated; /* crisp scaling for the tiled look */
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Full-window canvas test. No WASM, no server — purely checks that the
+      canvas fills the viewport and that its backing store tracks resizes
+      (window resize, devicePixelRatio changes, and fullscreen). F11 is
+      browser-native fullscreen: it just resizes the window, so the same
+      resize handler covers it. Press "f" to exercise the JS Fullscreen
+      API path too. The draw loop here is a stand-in for the future WASM
+      framebuffer blit.
+    -->
+    <canvas id="screen"></canvas>
+    <script type="module">
+      const canvas = document.getElementById("screen");
+      const ctx = canvas.getContext("2d");
+
+      // Resize the backing store to match the CSS size in *device* pixels,
+      // so rendering is crisp on HiDPI and after F11/monitor changes.
+      function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        const cssW = canvas.clientWidth;
+        const cssH = canvas.clientHeight;
+        const w = Math.max(1, Math.round(cssW * dpr));
+        const h = Math.max(1, Math.round(cssH * dpr));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        draw(cssW, cssH, dpr);
+      }
+
+      // Draw a frame that makes the dimensions obvious: a border, a
+      // crosshair, and a HUD reporting sizes / dpr / fullscreen state.
+      function draw(cssW, cssH, dpr) {
+        const w = canvas.width;
+        const h = canvas.height;
+
+        ctx.fillStyle = "#10101a";
+        ctx.fillRect(0, 0, w, h);
+
+        // inset border proves we reach every edge
+        ctx.strokeStyle = "#3a3a6a";
+        ctx.lineWidth = Math.max(1, Math.round(2 * dpr));
+        ctx.strokeRect(0, 0, w, h);
+
+        // crosshair to the true center
+        ctx.beginPath();
+        ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2);
+        ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, h);
+        ctx.strokeStyle = "#2a2a4a";
+        ctx.stroke();
+
+        const fs = document.fullscreenElement ? "yes" : "no";
+        const lines = [
+          "piler — full-window canvas resize test (no wasm, no server)",
+          `CSS size:      ${cssW} x ${cssH} px`,
+          `backing store: ${w} x ${h} px`,
+          `devicePixelRatio: ${dpr}`,
+          `fullscreen: ${fs}   (F11 = browser fullscreen, or press "f")`,
+        ];
+        ctx.fillStyle = "#9aa";
+        const fontPx = Math.round(14 * dpr);
+        ctx.font = `${fontPx}px monospace`;
+        ctx.textBaseline = "top";
+        lines.forEach((t, i) => ctx.fillText(t, 16 * dpr, (16 + i * 20) * dpr));
+
+        // expose for automation / Chrome DevTools to read (test-only)
+        window.__pilerCanvasTest = {
+          cssW, cssH, dpr,
+          backingW: w, backingH: h,
+          fullscreen: document.fullscreenElement != null,
+        };
+      }
+
+      window.addEventListener("resize", resize);
+      document.addEventListener("fullscreenchange", resize);
+      // devicePixelRatio can change (e.g. dragging to another monitor)
+      try {
+        matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+          .addEventListener("change", resize, { once: false });
+      } catch (_) { /* older browsers: resize covers most cases */ }
+
+      // "f" toggles the JS Fullscreen API so we can test that path without
+      // relying on the browser's F11 chrome.
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "f") {
+          if (document.fullscreenElement) document.exitFullscreen();
+          else document.documentElement.requestFullscreen?.();
+        }
+      });
+
+      resize();
+    </script>
+  </body>
+</html>

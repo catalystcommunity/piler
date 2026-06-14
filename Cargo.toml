@@ -1,0 +1,16 @@
+# Cargo workspace for the Rust side of piler.
+#
+# `coreclient` is the platform-agnostic game client core (native-testable,
+# no host/wasm deps). `webclient` is the browser host that wraps it for
+# WASM + canvas. The Go `server/` is intentionally outside this workspace.
+[workspace]
+resolver = "2"
+members = [
+    "coreclient",
+    "webclient",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/catalystcommunity/piler"

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>piler</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #0f0f17; overflow: hidden; }
+      /* Nothing but the canvas. All UI is rendered into it by the WASM core.
+         touch-action: none lets us use drags as a virtual stick without the
+         browser scrolling/zooming. */
+      #screen { display: block; touch-action: none; }
+
+      /* Hidden text-entry proxy (the canvas can't take keyboard input or raise
+         a soft keyboard). This is the battle-tested pattern from Monaco/
+         CodeMirror/Unity: a real <textarea> made INVISIBLE by transparency, not
+         opacity hacks. <textarea> (not <input>) for correct IME and because its
+         Enter lands a detectable newline in the value (a single-line <input>
+         strips newlines, and Android's enterkeyhint action key fires no
+         catchable event). font-size:16px stops iOS focus-zoom. */
+      #kbd {
+        position: fixed; left: 0; top: 0; width: 1px; height: 1px;
+        border: 0; outline: 0; padding: 0; margin: 0; resize: none; overflow: hidden;
+        font-size: 16px; background: transparent; color: transparent; caret-color: transparent;
+      }
+      /* Idle: parked BEHIND the opaque canvas (so it's never visible) and
+         ignoring pointer events (so canvas gestures — drag stick, double-tap —
+         get the touches). */
+      #kbd.idle    { z-index: -10; pointer-events: none; }
+      /* Editing: brought in front and made tappable; the host snaps it to sit
+         exactly over the on-canvas input box (Name field / chat box), so a tap
+         there focuses it natively — the reliable mobile keyboard summon —
+         without covering the rest of the canvas. It stays transparent, so the
+         on-canvas box drawn underneath is what you see. */
+      #kbd.editing { z-index: 10; pointer-events: auto; }
+    </style>
+  </head>
+  <body>
+    <canvas id="screen"></canvas>
+    <textarea id="kbd" class="idle" rows="1" inputmode="text"
+              autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

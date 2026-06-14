@@ -1,0 +1,35 @@
+# Rust
+/target
+**/target
+Cargo.lock.bak
+
+# WASM build output
+*.wasm
+/webclient/pkg
+/webclient/dist
+/webclient/web/wasm
+
+# Node / vite
+**/node_modules
+**/dist
+
+# Go
+*.exe
+*.test
+*.out
+/server/bin
+/server/server
+
+# Generated CSIL output is checked in (source-of-truth review), but
+# scratch/regeneration artifacts are not:
+*.gen.tmp
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+*.swp
+/logs

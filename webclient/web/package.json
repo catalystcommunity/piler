@@ -1,0 +1,16 @@
+{
+  "name": "piler-web-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vanilla-TS harness that drives the piler WASM client API and renders state. No framework.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^6.0.7"
+  }
+}

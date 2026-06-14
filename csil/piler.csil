@@ -1,0 +1,162 @@
+;; piler.csil — PoC world contract.
+;;
+;; Source of truth for the Go server (server/internal/csil), the Rust core
+;; client (coreclient/src/csil), and the TypeScript web harness types
+;; (webclient/web/src/api). Regenerate with ./csil/regenerate.sh after any
+;; change. Generated code is checked in so diffs are reviewable.
+;;
+;; This is deliberately minimal: enough domain to prove the flow of
+;; information and state (join a room, move at sub-tile precision, chat,
+;; read room state back). The transport RPC envelope is NOT modelled here —
+;; it is hand-written plumbing in each language (Go/Rust/TS) so the generic
+;; dispatcher can carry an opaque CBOR body without a nested-bytes encoding
+;; mismatch across CBOR libraries.
+
+;; ---- scalars / ids ----
+PlayerID  = text
+RoomID    = text
+Timestamp = text                 ;; RFC3339, UTC
+
+;; ---- positioning (see docs/positioning.md) ----
+;; Integer tile coords + fixed-point sub-tile offset in [0, SUB) + a layer
+;; for stacking. SUB is fixed by the server (see config); the client treats
+;; sub_x/sub_y as opaque fixed-point.
+Position = {
+    tile_x: int,
+    tile_y: int,
+    sub_x: uint,
+    sub_y: uint,
+    layer: int
+}
+
+;; NOTE: server-set fields (player_id, at) are conceptually @receive-only
+;; (a client never originates them). We omit that annotation for the PoC
+;; because no request payload embeds Player or ChatMessage, so marking them
+;; receive-only only serves to hide them from the client's own local state
+;; view (the generated Rust skips serializing them). Revisit if/when a
+;; request payload carries one of these types.
+Player = {
+    player_id: PlayerID,
+    name: text,
+    room_id: RoomID,
+    pos: Position
+}
+
+ChatMessage = {
+    player_id: PlayerID,
+    name: text,
+    message: text,
+    at: Timestamp
+}
+
+;; field_w / field_h are the room's play-area bounds in sub-units (the
+;; finest position unit: tile*SUB + sub). The server clamps movement to
+;; [0, field_w] x [0, field_h]; clients use them to size/draw the field.
+RoomState = {
+    room_id: RoomID,
+    players: [* Player],
+    recent_chat: [* ChatMessage],
+    field_w: uint,
+    field_h: uint
+}
+
+;; ---- request payloads ----
+JoinRequest = {
+    name: text,
+    ? room_id: RoomID
+}
+
+JoinResponse = {
+    player: Player,
+    room: RoomState
+}
+
+;; Sub-tile delta to apply to the caller's current position. The server
+;; validates and clamps, then persists.
+MoveRequest = {
+    dx: int,
+    dy: int
+}
+
+GetRoomStateRequest = {
+    ? room_id: RoomID
+}
+
+SayRequest = {
+    message: text
+}
+
+;; ---- request / event payloads ----
+
+;; Check whether a name is free before joining (sent on keystroke once the
+;; name reaches 3 characters).
+CheckNameRequest = {
+    name: text
+}
+
+;; Body of the "name-availability" event.
+NameAvailability = {
+    name: text,
+    available: bool
+}
+
+;; Body of the "tick" event: the authoritative per-tick snapshot of everyone
+;; present in the room (players + bots), pushed 30x/second. This subsumes the
+;; old per-move/join/left deltas — clients just replace their roster each tick.
+Tick = {
+    players: [* Player]
+}
+
+;; Body of the "firework" event: a player set off a firework above their
+;; avatar. The server broadcasts it to everyone else in the room (the sender
+;; renders its own locally for instant feedback); recipients place it at that
+;; player's current position. The client->server "firework" intent carries no
+;; body — identity comes from the connection's session.
+FireworkEvent = {
+    player_id: PlayerID
+}
+
+;; Body of the "error" event (e.g. name taken, acting before joining).
+ErrorEvent = {
+    code: int,
+    message: text
+}
+
+;; ---- transport envelopes (pure message-passing; same over TCP and WS) ----
+;; No request/response correlation: the client sends typed messages and the
+;; server pushes typed events back. body is an opaque CBOR-encoded payload so
+;; the dispatcher routes by kind/event without knowing payload types.
+
+;; Client -> server. kind is one of:
+;;   "join"       -> JoinRequest
+;;   "move"       -> MoveRequest        (intent; accumulated and applied per tick)
+;;   "say"        -> SayRequest         ("/demo [n]" is handled server-side)
+;;   "check-name" -> CheckNameRequest
+;;   "firework"   -> (no body)          (intent to set off a firework)
+ClientMessage = {
+    kind: text,
+    body: bytes
+}
+
+;; Server -> client push. event is one of:
+;;   "welcome"           -> JoinResponse   (your player + initial room snapshot)
+;;   "tick"              -> Tick           (30x/s roster + positions snapshot)
+;;   "chat"              -> ChatMessage    (broadcast to everyone, sender incl.)
+;;   "name-availability" -> NameAvailability
+;;   "firework"          -> FireworkEvent  (broadcast to everyone but the sender)
+;;   "error"             -> ErrorEvent
+ServerMessage = {
+    event: text,
+    body: bytes
+}
+
+;; ---- service ----
+;; The caller's identity is the connection's session (set by join); these
+;; methods act on "the player on this connection". Auth (LinkKeys) comes
+;; later — for the PoC the session is bound at join time.
+service WorldService {
+    join:           JoinRequest         -> JoinResponse / ServiceError,
+    move-player:    MoveRequest         -> Player        / ServiceError,
+    get-room-state: GetRoomStateRequest -> RoomState     / ServiceError,
+    say:            SayRequest          -> RoomState     / ServiceError
+}
