@@ -1,9 +1,14 @@
-// Package rpc is the transport-agnostic message core: a per-connection
-// session, a connection hub for presence + broadcasts, and a dispatcher that
-// routes inbound ClientMessages by kind. The protocol is pure message-passing
-// — handlers react to a message by pushing events (to the sender and/or the
-// room) rather than returning a correlated response. TCP and WebSocket
-// transports both feed raw CBOR frames to HandleMessage.
+// Package rpc is the transport-agnostic message core: a Dispatcher that routes
+// inbound ClientMessages by kind, and a Conn (a unique id plus a serialized
+// outbound frame channel). The protocol is pure message-passing — handlers
+// react to a message by pushing events back through the Conn (to the sender
+// and/or, via the world's roster, the room) rather than returning a correlated
+// response. TCP and WebSocket transports both feed raw CBOR frames to
+// HandleMessage.
+//
+// Presence and identity are NOT tracked here: the world package keys its
+// actors by Conn.ID and binds identity at join. There is no auth or session
+// yet (LinkKeys comes later).
 package rpc
 
 import (
@@ -18,7 +23,7 @@ import (
 )
 
 // Handler reacts to one client message. body is the CBOR payload for the
-// message kind. It pushes any resulting events via the Conn / Hub and returns
+// message kind. It pushes any resulting events via the Conn and returns
 // an error only for failures worth reporting to the sender (an *Error becomes
 // an "error" event; anything else is logged as internal).
 type Handler func(ctx context.Context, c *Conn, body []byte) error
@@ -57,7 +62,7 @@ func (d *Dispatcher) HandleMessage(ctx context.Context, c *Conn, frame []byte) {
 	if err := h(ctx, c, msg.Body); err != nil {
 		var rerr *Error
 		if errors.As(err, &rerr) {
-			c.PushError(int64(rerr.Code), rerr.Message)
+			c.PushError(rerr.Code, rerr.Message)
 			return
 		}
 		log.Printf("rpc: handler for %q returned unstructured error: %v", msg.Kind, err)

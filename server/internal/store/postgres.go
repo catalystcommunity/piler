@@ -2,11 +2,9 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/catalystcommunity/piler/server/internal/csil"
@@ -61,24 +59,6 @@ func (s *Postgres) CreatePlayer(ctx context.Context, p csil.Player) error {
 	return err
 }
 
-func (s *Postgres) GetPlayer(ctx context.Context, playerID string) (csil.Player, error) {
-	var p csil.Player
-	var pid, rid string
-	err := s.pool.QueryRow(ctx,
-		`SELECT player_id, name, room_id, tile_x, tile_y, sub_x, sub_y, layer
-		 FROM players WHERE player_id = $1`, playerID).
-		Scan(&pid, &p.Name, &rid, &p.Pos.TileX, &p.Pos.TileY, &p.Pos.SubX, &p.Pos.SubY, &p.Pos.Layer)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return csil.Player{}, &ErrNotFound{What: "player"}
-	}
-	if err != nil {
-		return csil.Player{}, err
-	}
-	p.PlayerId = csil.PlayerID(pid)
-	p.RoomId = csil.RoomID(rid)
-	return p, nil
-}
-
 func (s *Postgres) UpdatePlayerPosition(ctx context.Context, playerID string, pos csil.Position) error {
 	_, err := s.pool.Exec(ctx,
 		`UPDATE players
@@ -86,30 +66,6 @@ func (s *Postgres) UpdatePlayerPosition(ctx context.Context, playerID string, po
 		 WHERE player_id = $1`,
 		playerID, pos.TileX, pos.TileY, pos.SubX, pos.SubY, pos.Layer)
 	return err
-}
-
-func (s *Postgres) ListPlayersInRoom(ctx context.Context, roomID string) ([]csil.Player, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT player_id, name, room_id, tile_x, tile_y, sub_x, sub_y, layer
-		 FROM players WHERE room_id = $1 ORDER BY created_at`, roomID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	players := []csil.Player{}
-	for rows.Next() {
-		var p csil.Player
-		var pid, rid string
-		if err := rows.Scan(&pid, &p.Name, &rid,
-			&p.Pos.TileX, &p.Pos.TileY, &p.Pos.SubX, &p.Pos.SubY, &p.Pos.Layer); err != nil {
-			return nil, err
-		}
-		p.PlayerId = csil.PlayerID(pid)
-		p.RoomId = csil.RoomID(rid)
-		players = append(players, p)
-	}
-	return players, rows.Err()
 }
 
 func (s *Postgres) InsertChat(ctx context.Context, roomID, playerID, name, message string) error {

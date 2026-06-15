@@ -6,9 +6,7 @@ package world
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +25,7 @@ const (
 	maxChatRunes   = 500
 	recentChatSize = 50
 
-	botSpeed       = 250    // sub-units per tick
+	botSpeed       = 250 // sub-units per tick
 	minBots        = 3
 	maxBots        = 8
 	botSayMinTicks = 30 * 10 // ~10s at 30Hz
@@ -302,86 +300,6 @@ func (w *World) Tick() {
 			}
 		}
 	}
-}
-
-func (w *World) stepBotLocked(a *actor) {
-	s := int64(w.sub)
-	curX := a.player.Pos.TileX*s + int64(a.player.Pos.SubX)
-	curY := a.player.Pos.TileY*s + int64(a.player.Pos.SubY)
-	if absI64(a.targetX-curX) <= botSpeed && absI64(a.targetY-curY) <= botSpeed {
-		a.targetX = rand.Int63n(int64(w.fieldW) + 1)
-		a.targetY = rand.Int63n(int64(w.fieldH) + 1)
-	}
-	dx := clampStep(a.targetX-curX, botSpeed)
-	dy := clampStep(a.targetY-curY, botSpeed)
-	a.player.Pos = applyMove(a.player.Pos, dx, dy, w.sub, w.fieldW, w.fieldH)
-}
-
-// --- /demo ---
-
-func (w *World) handleDemo(msg, roomID string) {
-	n := 0
-	if fields := strings.Fields(msg); len(fields) >= 2 {
-		if v, err := strconv.Atoi(fields[1]); err == nil {
-			n = v
-		}
-	}
-	w.toggleDemo(roomID, n)
-}
-
-func (w *World) toggleDemo(roomID string, n int) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if w.demoRunning {
-		for _, id := range w.demoBots {
-			w.removeLocked(id)
-		}
-		w.demoBots = nil
-		w.demoRunning = false
-		return
-	}
-
-	if n < minBots {
-		n = minBots
-	}
-	if n > maxBots {
-		n = maxBots
-	}
-	for i := 0; i < n; i++ {
-		id := rpc.NextID()
-		name := w.botNameLocked(i)
-		bx := rand.Int63n(int64(w.fieldW) + 1)
-		by := rand.Int63n(int64(w.fieldH) + 1)
-		a := &actor{
-			isBot: true,
-			player: csil.Player{
-				PlayerId: csil.PlayerID("bot:" + name), // stable id → stable identicon
-				Name:     name,
-				RoomId:   csil.RoomID(roomID),
-				Pos:      posFromTotal(bx, by, int64(w.sub), 0),
-			},
-			targetX:   rand.Int63n(int64(w.fieldW) + 1),
-			targetY:   rand.Int63n(int64(w.fieldH) + 1),
-			sayAtTick: w.tickN + int64(botSayMinTicks+rand.Intn(botSayMaxTicks-botSayMinTicks+1)),
-		}
-		w.addLocked(id, a)
-		w.demoBots = append(w.demoBots, id)
-	}
-	w.demoRunning = true
-}
-
-func (w *World) botNameLocked(i int) string {
-	base := fmt.Sprintf("Bot%d", i+1)
-	if i < len(botBaseNames) {
-		base = botBaseNames[i]
-	}
-	name, n := base, 2
-	for w.nameTakenLocked(name) {
-		name = fmt.Sprintf("%s%d", base, n)
-		n++
-	}
-	return name
 }
 
 // --- locked helpers ---

@@ -18,14 +18,8 @@ type Store interface {
 	// CreatePlayer inserts a new player row (caller assigns PlayerId).
 	CreatePlayer(ctx context.Context, p csil.Player) error
 
-	// GetPlayer returns a player by id.
-	GetPlayer(ctx context.Context, playerID string) (csil.Player, error)
-
 	// UpdatePlayerPosition persists a player's new position.
 	UpdatePlayerPosition(ctx context.Context, playerID string, pos csil.Position) error
-
-	// ListPlayersInRoom returns all players currently in a room.
-	ListPlayersInRoom(ctx context.Context, roomID string) ([]csil.Player, error)
 
 	// InsertChat appends a chat message to a room's log.
 	InsertChat(ctx context.Context, roomID, playerID, name, message string) error
@@ -37,8 +31,3 @@ type Store interface {
 	// Close releases resources (e.g. the connection pool).
 	Close()
 }
-
-// ErrNotFound is returned by Store implementations when a row is absent.
-type ErrNotFound struct{ What string }
-
-func (e *ErrNotFound) Error() string { return e.What + " not found" }

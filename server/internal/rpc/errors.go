@@ -7,7 +7,7 @@ import "fmt"
 // concern; any other error is treated as an internal 500 and its detail is
 // logged but never returned.
 type Error struct {
-	Code    int
+	Code    int64
 	Message string
 }
 

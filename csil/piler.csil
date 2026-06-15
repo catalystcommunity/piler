@@ -6,11 +6,14 @@
 ;; change. Generated code is checked in so diffs are reviewable.
 ;;
 ;; This is deliberately minimal: enough domain to prove the flow of
-;; information and state (join a room, move at sub-tile precision, chat,
-;; read room state back). The transport RPC envelope is NOT modelled here —
-;; it is hand-written plumbing in each language (Go/Rust/TS) so the generic
-;; dispatcher can carry an opaque CBOR body without a nested-bytes encoding
-;; mismatch across CBOR libraries.
+;; information and state (join a room, move at sub-tile precision, chat).
+;;
+;; The live PoC transport is pure message-passing: the ClientMessage /
+;; ServerMessage envelopes below ARE modelled here, but their `body` field is
+;; an opaque CBOR `bytes` string. Keeping body opaque (rather than a nested
+;; typed union) is what lets the generic dispatcher route by kind/event
+;; without a nested-bytes encoding mismatch across the Go/Rust/TS CBOR
+;; libraries; handlers decode body into the matching payload type themselves.
 
 ;; ---- scalars / ids ----
 PlayerID  = text
@@ -150,10 +153,15 @@ ServerMessage = {
     body: bytes
 }
 
-;; ---- service ----
-;; The caller's identity is the connection's session (set by join); these
-;; methods act on "the player on this connection". Auth (LinkKeys) comes
-;; later — for the PoC the session is bound at join time.
+;; ---- service (FORWARD-LOOKING — not the live PoC wire protocol) ----
+;; WorldService is a typed request/response RPC contract kept for the FUTURE
+;; native client. The running PoC does NOT use it: live traffic is the
+;; correlation-free ClientMessage/ServerMessage event-push above. This block
+;; still generates a Rust WorldClient/Transport (deliberately retained, see
+;; csil/regenerate.sh) and an unused Go WorldService interface that nothing
+;; implements — do not infer from it that the server speaks request/response.
+;; The caller's identity will be the connection's session (set by join); these
+;; methods act on "the player on this connection". Auth (LinkKeys) comes later.
 service WorldService {
     join:           JoinRequest         -> JoinResponse / ServiceError,
     move-player:    MoveRequest         -> Player        / ServiceError,

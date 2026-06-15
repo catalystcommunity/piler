@@ -24,14 +24,8 @@ func (f *fakeStore) RoomExists(_ context.Context, roomID string) (bool, error) {
 	return f.rooms[roomID], nil
 }
 func (f *fakeStore) CreatePlayer(_ context.Context, _ csil.Player) error { return nil }
-func (f *fakeStore) GetPlayer(_ context.Context, _ string) (csil.Player, error) {
-	return csil.Player{}, &notFound{}
-}
 func (f *fakeStore) UpdatePlayerPosition(_ context.Context, _ string, _ csil.Position) error {
 	return nil
-}
-func (f *fakeStore) ListPlayersInRoom(_ context.Context, _ string) ([]csil.Player, error) {
-	return nil, nil
 }
 func (f *fakeStore) InsertChat(_ context.Context, roomID, playerID, name, message string) error {
 	f.chat[roomID] = append(f.chat[roomID], csil.ChatMessage{
@@ -47,10 +41,6 @@ func (f *fakeStore) RecentChat(_ context.Context, roomID string, limit int) ([]c
 	return msgs, nil
 }
 func (f *fakeStore) Close() {}
-
-type notFound struct{}
-
-func (*notFound) Error() string { return "not found" }
 
 // small field so the center is total (1000,1000) → tile(1,1).
 func newWorld() *World { return New(newFakeStore(), 1000, 2000, 2000) }
@@ -179,6 +169,22 @@ func TestMoveAppliesOnTickWithClamp(t *testing.T) {
 	p = find[csil.Tick](t, drain(t, c), "tick").Players[0]
 	if p.Pos.TileX != 2 || p.Pos.SubX != 0 {
 		t.Fatalf("clamp: tile_x=%d sub_x=%d, want 2/0", p.Pos.TileX, p.Pos.SubX)
+	}
+
+	// Leftward borrow across a tile boundary: total 2000-800 = 1200 → tile 1 sub 200.
+	_ = w.move(context.Background(), c, body(t, csil.MoveRequest{Dx: -800}))
+	w.Tick()
+	p = find[csil.Tick](t, drain(t, c), "tick").Players[0]
+	if p.Pos.TileX != 1 || p.Pos.SubX != 200 {
+		t.Fatalf("borrow: tile_x=%d sub_x=%d, want 1/200", p.Pos.TileX, p.Pos.SubX)
+	}
+
+	// Borrow across the next boundary: total 1200-1000 = 200 → tile 0 sub 200.
+	_ = w.move(context.Background(), c, body(t, csil.MoveRequest{Dx: -1000}))
+	w.Tick()
+	p = find[csil.Tick](t, drain(t, c), "tick").Players[0]
+	if p.Pos.TileX != 0 || p.Pos.SubX != 200 {
+		t.Fatalf("borrow across boundary: tile_x=%d sub_x=%d, want 0/200", p.Pos.TileX, p.Pos.SubX)
 	}
 }
 
