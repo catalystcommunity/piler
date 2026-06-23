@@ -1,8 +1,9 @@
 module github.com/catalystcommunity/piler/server
 
-go 1.26
+go 1.26.3
 
 require (
+	github.com/catalystcommunity/csilgen/transports/go v0.0.0-20260619204013-714fbcee2486
 	github.com/catalystcommunity/piler/coredb v0.0.0-00010101000000-000000000000
 	github.com/catalystcommunity/websocks v0.0.0-00010101000000-000000000000
 	github.com/fxamacker/cbor/v2 v2.9.2

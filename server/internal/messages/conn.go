@@ -1,6 +1,7 @@
-package rpc
+package messages
 
 import (
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -21,6 +22,10 @@ func NextID() uint64 { return idSeq.Add(1) }
 // draining Out(), so all writes to the socket are serialized — handler
 // responses and the broadcast/tick path from any goroutine just enqueue here,
 // which keeps concurrent sends race-free.
+//
+// Frames are CSIL-Events events in the configured profile (compact or verbose;
+// see ops.go and codec.go). All connections share the one profile, so the
+// broadcast path can encode a frame once and SendRaw it to the whole room.
 type Conn struct {
 	ID uint64
 
@@ -38,7 +43,7 @@ func NewConn() *Conn {
 	}
 }
 
-// Out is the stream of encoded ServerMessage frames the transport writes.
+// Out is the stream of encoded event frames the transport writes.
 func (c *Conn) Out() <-chan []byte { return c.out }
 
 // Done is closed when the connection is shutting down.
@@ -60,12 +65,26 @@ func (c *Conn) SendRaw(frame []byte) {
 	}
 }
 
-// PushEvent encodes payload and enqueues a server push with the given event.
+// PushEvent encodes payload as a server→client World event (in the active
+// profile) and enqueues it.
 func (c *Conn) PushEvent(event string, payload any) {
 	c.SendRaw(EncodeEvent(event, payload))
 }
 
-// PushError sends the "error" event to this connection.
+// PushError sends the "error" event to this connection. (Application errors ride
+// as their own event type; transport-level failures use the control-plane
+// $error — see csil-events-transport.md §3.)
 func (c *Conn) PushError(code int64, message string) {
 	c.PushEvent("error", csil.ErrorEvent{Code: code, Message: message})
+}
+
+// pushControl enqueues a control-plane event (a `$`-named op) carrying an
+// already-encoded control payload, in the active profile.
+func (c *Conn) pushControl(name string, payload []byte) {
+	frame, err := encodeControlFrame(appProfile, name, payload)
+	if err != nil {
+		log.Printf("messages: control encode failed: %v", err)
+		return
+	}
+	c.SendRaw(frame)
 }

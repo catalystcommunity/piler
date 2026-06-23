@@ -8,12 +8,18 @@
 ;; This is deliberately minimal: enough domain to prove the flow of
 ;; information and state (join a room, move at sub-tile precision, chat).
 ;;
-;; The live PoC transport is pure message-passing: the ClientMessage /
-;; ServerMessage envelopes below ARE modelled here, but their `body` field is
-;; an opaque CBOR `bytes` string. Keeping body opaque (rather than a nested
-;; typed union) is what lets the generic dispatcher route by kind/event
-;; without a nested-bytes encoding mismatch across the Go/Rust/TS CBOR
-;; libraries; handlers decode body into the matching payload type themselves.
+;; TRANSPORT: piler rides the standardized CSIL-Events transport from csilgen
+;; (github.com/catalystcommunity/csilgen, transports/{go,rust}; see
+;; docs/csil-events-transport.md and piler's docs/transport-and-auth.md). Two
+;; wire profiles are supported; the server picks one via PILER_WIRE_PROFILE
+;; (default "compact", or "verbose"), and the client follows it via the
+;; handshake:
+;;   compact — positional array [service_ord, op_ord, payload] (efficient).
+;;   verbose — text-keyed map {event, payload, ...} (debuggable).
+;; Either way `payload` is the tag-24 CBOR of the matching type below. The World
+;; service carries the @wire-id ordinals used by the compact profile (verbose
+;; uses the operation names). The handshake ($hello/$hello-ack) is always
+;; verbose; subsequent frames use the negotiated profile.
 
 ;; ---- scalars / ids ----
 PlayerID  = text
@@ -81,13 +87,14 @@ MoveRequest = {
     dy: int
 }
 
-GetRoomStateRequest = {
-    ? room_id: RoomID
-}
-
 SayRequest = {
     message: text
 }
+
+;; The client->server "firework" intent carries no fields — identity and
+;; position come from the connection's session. Modelled as an empty payload so
+;; the operation has a client->server type.
+FireworkIntent = {}
 
 ;; ---- request / event payloads ----
 
@@ -125,46 +132,40 @@ ErrorEvent = {
     message: text
 }
 
-;; ---- transport envelopes (pure message-passing; same over TCP and WS) ----
-;; No request/response correlation: the client sends typed messages and the
-;; server pushes typed events back. body is an opaque CBOR-encoded payload so
-;; the dispatcher routes by kind/event without knowing payload types.
-
-;; Client -> server. kind is one of:
-;;   "join"       -> JoinRequest
-;;   "move"       -> MoveRequest        (intent; accumulated and applied per tick)
-;;   "say"        -> SayRequest         ("/demo [n]" is handled server-side)
-;;   "check-name" -> CheckNameRequest
-;;   "firework"   -> (no body)          (intent to set off a firework)
-ClientMessage = {
-    kind: text,
-    body: bytes
-}
-
-;; Server -> client push. event is one of:
-;;   "welcome"           -> JoinResponse   (your player + initial room snapshot)
-;;   "tick"              -> Tick           (30x/s roster + positions snapshot)
-;;   "chat"              -> ChatMessage    (broadcast to everyone, sender incl.)
-;;   "name-availability" -> NameAvailability
-;;   "firework"          -> FireworkEvent  (broadcast to everyone but the sender)
-;;   "error"             -> ErrorEvent
-ServerMessage = {
-    event: text,
-    body: bytes
-}
-
-;; ---- service (FORWARD-LOOKING — not the live PoC wire protocol) ----
-;; WorldService is a typed request/response RPC contract kept for the FUTURE
-;; native client. The running PoC does NOT use it: live traffic is the
-;; correlation-free ClientMessage/ServerMessage event-push above. This block
-;; still generates a Rust WorldClient/Transport (deliberately retained, see
-;; csil/regenerate.sh) and an unused Go WorldService interface that nothing
-;; implements — do not infer from it that the server speaks request/response.
-;; The caller's identity will be the connection's session (set by join); these
-;; methods act on "the player on this connection". Auth (LinkKeys) comes later.
-service WorldService {
-    join:           JoinRequest         -> JoinResponse / ServiceError,
-    move-player:    MoveRequest         -> Player        / ServiceError,
-    get-room-state: GetRoomStateRequest -> RoomState     / ServiceError,
-    say:            SayRequest          -> RoomState     / ServiceError
+;; ---- the live protocol: World, a CSIL-Events service ----
+;; The actual wire contract. Each operation has a stable @wire-id: the service's
+;; is the compact `service_ord` (0 is reserved for the transport control plane —
+;; $hello/$ping/$close), each operation's is its `op_ord`.
+;;
+;; Direction operators (CSIL-Events):
+;;   A <-> B   request/reply over the open connection — client sends A, server
+;;             replies B; the reply is OPTIONAL and, when used, correlated by the
+;;             envelope's `id` (join → welcome, check-name → name-availability).
+;;   -> A      client→server one-way event (fire-and-forget intent).
+;;   <- A      server→client one-way push.
+;; Operations are kept SEPARATE when they are semantically separate: `tick` is a
+;; standalone server push (NOT a reply to `move`), `chat` a standalone push (it
+;; also carries bot/other-player messages), `burst` the firework broadcast to
+;; everyone-but-the-sender (not a reply to the sender's own `firework` intent).
+;;
+;; Identity is the connection's session (bound at join); every op acts on "the
+;; player on this connection". Auth (LinkKeys) will ride the $hello credential.
+;;
+;; NOTE: piler hand-routes by these ordinals (it does not use csilgen's generated
+;; router/client — generation is types-only). csilgen validates @wire-id
+;; (uniqueness, reserved-0, all-or-nothing) and uses it for breaking-change
+;; detection, but its generators don't emit ordinal constants, so the runtime
+;; mirrors these numbers in server/internal/messages/ops.go and
+;; coreclient/src/client.rs — keep all three in sync.
+@wire-id(1)
+service World {
+    @wire-id(0) join:       JoinRequest      <-> JoinResponse,      ;; reply: "welcome"
+    @wire-id(1) check-name: CheckNameRequest <-> NameAvailability,  ;; reply: availability
+    @wire-id(2) move:       -> MoveRequest,                         ;; client intent
+    @wire-id(3) tick:       <- Tick,                                ;; server snapshot (30 Hz)
+    @wire-id(4) say:        -> SayRequest,                          ;; client chat send
+    @wire-id(5) chat:       <- ChatMessage,                         ;; server broadcast
+    @wire-id(6) firework:   -> FireworkIntent,                      ;; client intent
+    @wire-id(7) burst:      <- FireworkEvent,                       ;; server broadcast (others)
+    @wire-id(8) error:      <- ErrorEvent                           ;; server error push
 }

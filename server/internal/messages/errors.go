@@ -1,4 +1,4 @@
-package rpc
+package messages
 
 import "fmt"
 

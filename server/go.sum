@@ -1,3 +1,5 @@
+github.com/catalystcommunity/csilgen/transports/go v0.0.0-20260619204013-714fbcee2486 h1:wkyjJ7h9/A/wGmeRS+4RQNEuCyiepR7pUAICnyLeOG8=
+github.com/catalystcommunity/csilgen/transports/go v0.0.0-20260619204013-714fbcee2486/go.mod h1:7CdM6CycSuRgLJ1Qt8A10qJZlIIlvSZG8PfkU8s0fCM=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

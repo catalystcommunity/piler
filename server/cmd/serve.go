@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/catalystcommunity/piler/server/internal/config"
-	"github.com/catalystcommunity/piler/server/internal/rpc"
+	"github.com/catalystcommunity/piler/server/internal/messages"
 	"github.com/catalystcommunity/piler/server/internal/store"
 	"github.com/catalystcommunity/piler/server/internal/transport"
 	"github.com/catalystcommunity/piler/server/internal/world"
@@ -38,8 +38,15 @@ func Serve(flags map[string]string) error {
 	}
 	defer st.Close()
 
+	// Fix the post-handshake wire profile from config (default compact).
+	profile, ok := messages.ParseProfile(config.WireProfile)
+	if !ok {
+		return fmt.Errorf("invalid PILER_WIRE_PROFILE %q (want \"compact\" or \"verbose\")", config.WireProfile)
+	}
+	messages.SetProfile(profile)
+
 	w := world.New(st, config.SubResolution, config.FieldWidthSub, config.FieldHeightSub)
-	d := rpc.New()
+	d := messages.New()
 	w.Register(d)
 
 	// Authoritative simulation tick (apply move intents, step bots, broadcast
@@ -76,7 +83,8 @@ func Serve(flags map[string]string) error {
 		httpErr <- httpSrv.ListenAndServe()
 	}()
 
-	log.Printf("piler: server up (sub-resolution=%d). Ctrl-C to stop.", config.SubResolution)
+	log.Printf("piler: server up (sub-resolution=%d, wire-profile=%s). Ctrl-C to stop.",
+		config.SubResolution, profile)
 
 	select {
 	case <-ctx.Done():

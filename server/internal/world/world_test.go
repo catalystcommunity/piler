@@ -6,8 +6,10 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
+	txp "github.com/catalystcommunity/csilgen/transports/go"
+
 	"github.com/catalystcommunity/piler/server/internal/csil"
-	"github.com/catalystcommunity/piler/server/internal/rpc"
+	"github.com/catalystcommunity/piler/server/internal/messages"
 )
 
 // fakeStore is an in-memory Store for API-level tests — no database needed.
@@ -54,50 +56,60 @@ func body(t *testing.T, v any) []byte {
 	return b
 }
 
-func drain(t *testing.T, c *rpc.Conn) []csil.ServerMessage {
+// drain decodes every queued frame as a CSIL-Events event in the active profile
+// (compact by default in tests), so tests assert on operation + payload.
+func drain(t *testing.T, c *messages.Conn) []txp.Event {
 	t.Helper()
-	var out []csil.ServerMessage
+	var out []txp.Event
 	for {
 		select {
 		case b := <-c.Out():
-			var m csil.ServerMessage
-			if err := cbor.Unmarshal(b, &m); err != nil {
-				t.Fatalf("decode server message: %v", err)
+			ev, err := txp.DecodeEvent(b, messages.ActiveProfile())
+			if err != nil {
+				t.Fatalf("decode event: %v", err)
 			}
-			out = append(out, m)
+			out = append(out, ev)
 		default:
 			return out
 		}
 	}
 }
 
-func find[T any](t *testing.T, msgs []csil.ServerMessage, event string) T {
+// find locates the server→client event by name (resolved to its compact op
+// ordinal) and decodes its payload.
+func find[T any](t *testing.T, msgs []txp.Event, event string) T {
 	t.Helper()
+	want, ok := messages.OutboundOp(event)
+	if !ok {
+		t.Fatalf("unknown server event name %q", event)
+	}
 	for _, m := range msgs {
-		if m.Event == event {
+		if m.OpOrd != nil && *m.OpOrd == want {
 			var v T
-			if err := cbor.Unmarshal(m.Body, &v); err != nil {
+			if err := cbor.Unmarshal(m.Payload, &v); err != nil {
 				t.Fatalf("decode %q: %v", event, err)
 			}
 			return v
 		}
 	}
-	t.Fatalf("no %q event in %v", event, names(msgs))
+	t.Fatalf("no %q event (op %d) in ops %v", event, want, ops(msgs))
 	var zero T
 	return zero
 }
 
-func names(msgs []csil.ServerMessage) []string {
-	out := make([]string, len(msgs))
+func ops(msgs []txp.Event) []uint64 {
+	out := make([]uint64, len(msgs))
 	for i, m := range msgs {
-		out[i] = m.Event
+		if m.OpOrd != nil {
+			out[i] = *m.OpOrd
+		}
 	}
 	return out
 }
 
 func TestJoinWelcomesAtCenter(t *testing.T) {
 	w := newWorld()
-	c := rpc.NewConn()
+	c := messages.NewConn()
 	if err := w.join(context.Background(), c, body(t, csil.JoinRequest{Name: "Ada"})); err != nil {
 		t.Fatalf("join: %v", err)
 	}
@@ -115,26 +127,26 @@ func TestJoinWelcomesAtCenter(t *testing.T) {
 
 func TestJoinRejectsShortAndDuplicateNames(t *testing.T) {
 	w := newWorld()
-	if err := w.join(context.Background(), rpc.NewConn(), body(t, csil.JoinRequest{Name: "ab"})); err == nil {
+	if err := w.join(context.Background(), messages.NewConn(), body(t, csil.JoinRequest{Name: "ab"})); err == nil {
 		t.Fatal("expected 2-char name to be rejected")
 	}
-	c1 := rpc.NewConn()
+	c1 := messages.NewConn()
 	if err := w.join(context.Background(), c1, body(t, csil.JoinRequest{Name: "Ada"})); err != nil {
 		t.Fatalf("first join: %v", err)
 	}
 	// Case-insensitive duplicate.
-	if err := w.join(context.Background(), rpc.NewConn(), body(t, csil.JoinRequest{Name: "ada"})); err == nil {
+	if err := w.join(context.Background(), messages.NewConn(), body(t, csil.JoinRequest{Name: "ada"})); err == nil {
 		t.Fatal("expected duplicate name to be rejected")
 	}
 }
 
 func TestCheckNameAvailability(t *testing.T) {
 	w := newWorld()
-	c := rpc.NewConn()
+	c := messages.NewConn()
 	_ = w.join(context.Background(), c, body(t, csil.JoinRequest{Name: "Ada"}))
 	_ = drain(t, c)
 
-	probe := rpc.NewConn()
+	probe := messages.NewConn()
 	_ = w.checkName(context.Background(), probe, body(t, csil.CheckNameRequest{Name: "Ada"}))
 	taken := find[csil.NameAvailability](t, drain(t, probe), "name-availability")
 	if taken.Available {
@@ -149,7 +161,7 @@ func TestCheckNameAvailability(t *testing.T) {
 
 func TestMoveAppliesOnTickWithClamp(t *testing.T) {
 	w := newWorld()
-	c := rpc.NewConn()
+	c := messages.NewConn()
 	_ = w.join(context.Background(), c, body(t, csil.JoinRequest{Name: "Ada"}))
 	_ = drain(t, c) // welcome
 
@@ -190,14 +202,14 @@ func TestMoveAppliesOnTickWithClamp(t *testing.T) {
 
 func TestMoveBeforeJoinRejected(t *testing.T) {
 	w := newWorld()
-	if err := w.move(context.Background(), rpc.NewConn(), body(t, csil.MoveRequest{Dx: 1})); err == nil {
+	if err := w.move(context.Background(), messages.NewConn(), body(t, csil.MoveRequest{Dx: 1})); err == nil {
 		t.Fatal("expected move-before-join to be rejected")
 	}
 }
 
 func TestSayBroadcastsChat(t *testing.T) {
 	w := newWorld()
-	c := rpc.NewConn()
+	c := messages.NewConn()
 	_ = w.join(context.Background(), c, body(t, csil.JoinRequest{Name: "Lin"}))
 	_ = drain(t, c)
 	if err := w.say(context.Background(), c, body(t, csil.SayRequest{Message: "hello"})); err != nil {
@@ -211,7 +223,7 @@ func TestSayBroadcastsChat(t *testing.T) {
 
 func TestDemoToggleAndClamp(t *testing.T) {
 	w := newWorld()
-	c := rpc.NewConn()
+	c := messages.NewConn()
 	_ = w.join(context.Background(), c, body(t, csil.JoinRequest{Name: "Ada"}))
 	_ = drain(t, c)
 
