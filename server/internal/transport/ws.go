@@ -9,7 +9,9 @@ import (
 
 	websocks "github.com/catalystcommunity/websocks/v1"
 
-	"github.com/catalystcommunity/piler/server/internal/rpc"
+	txp "github.com/catalystcommunity/csilgen/transports/go"
+
+	"github.com/catalystcommunity/piler/server/internal/messages"
 )
 
 // wsBinaryMessage is the WebSocket binary opcode (RFC 6455 0x2), matching
@@ -24,9 +26,27 @@ type wsMessageConn interface {
 	WriteMessage(messageType int, payload []byte) error
 }
 
-// WSHandler upgrades to WebSocket (via websocks) and runs the same message
-// loop as TCP, framed per WebSocket binary message instead of length-prefixed.
-func WSHandler(ctx context.Context, d *rpc.Dispatcher, onDisconnect func(uint64)) http.Handler {
+// wsCarrier adapts a websocks binary-message connection to the CSIL-Events
+// FrameCarrier seam: one binary WS message is one CSIL-Events frame (the
+// WebSocket carrier per csil-events-transport.md §4 — no length prefix; the WS
+// message framing supplies the boundaries).
+type wsCarrier struct{ mc wsMessageConn }
+
+func (w wsCarrier) SendFrame(b []byte) error {
+	return w.mc.WriteMessage(wsBinaryMessage, b)
+}
+
+func (w wsCarrier) RecvFrame() ([]byte, error) {
+	_, payload, err := w.mc.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+// WSHandler upgrades to WebSocket (via websocks) and runs the same connection
+// lifecycle as TCP over a binary-message carrier.
+func WSHandler(ctx context.Context, d *messages.Dispatcher, onDisconnect func(uint64)) http.Handler {
 	return websocks.NewHandler(func(nc net.Conn) error {
 		mc, ok := nc.(wsMessageConn)
 		if !ok {
@@ -35,15 +55,9 @@ func WSHandler(ctx context.Context, d *rpc.Dispatcher, onDisconnect func(uint64)
 			return errors.New("websocks binary message support unavailable")
 		}
 
-		conn := rpc.NewConn()
-		readFrame := func() ([]byte, error) {
-			_, payload, err := mc.ReadMessage()
-			return payload, err
-		}
-		writeFrame := func(payload []byte) error {
-			return mc.WriteMessage(wsBinaryMessage, payload)
-		}
-		runConn(ctx, conn, d, readFrame, writeFrame, func() { _ = nc.Close() }, onDisconnect)
+		conn := messages.NewConn()
+		var carrier txp.FrameCarrier = wsCarrier{mc: mc}
+		runConn(ctx, conn, d, carrier, func() { _ = nc.Close() }, onDisconnect)
 		return nil
 	})
 }

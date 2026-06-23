@@ -95,15 +95,23 @@ pub struct App {
 
     frame: u64,
     outbound: Vec<Vec<u8>>,
+    // True once the server's $hello-ack has fixed the wire profile. App frames
+    // are withheld until then so none is sent in the wrong profile.
+    connected: bool,
     avatars: HashMap<String, Identicon>,
 }
 
 impl App {
     pub fn new(width: u32, height: u32, dpr: f64) -> Self {
+        let client = Client::new();
+        // Open the CSIL-Events connection: `$hello` is queued as the first
+        // outbound frame, so the host sends it the moment the socket is open
+        // (before any application event). The server replies `$hello-ack`.
+        let hello = client.build_hello();
         App {
             fb: Framebuffer::new(width.max(1), height.max(1)),
             dpr: if dpr > 0.0 { dpr } else { 1.0 },
-            client: Client::new(),
+            client,
             screen: Screen::Name,
             name: String::new(),
             name_taken: false,
@@ -118,8 +126,18 @@ impl App {
             cooldown: 0,
             fireworks: Vec::new(),
             frame: 0,
-            outbound: Vec::new(),
+            outbound: vec![hello],
+            connected: false,
             avatars: HashMap::new(),
+        }
+    }
+
+    /// Queue an application frame for sending — but only once connected (the
+    /// handshake has fixed the wire profile). Pre-connection intents are dropped;
+    /// the connection establishes in milliseconds and input repeats.
+    fn emit(&mut self, frame: Vec<u8>) {
+        if self.connected {
+            self.outbound.push(frame);
         }
     }
 
@@ -164,6 +182,19 @@ impl App {
                     self.spawn_firework(lx, ly);
                 }
             }
+            // Handshake accepted: the wire profile is now fixed, so app frames
+            // may flow. Gating on this avoids sending an app frame in the wrong
+            // (pre-negotiation) profile.
+            Ok(Event::HelloAck) => {
+                self.connected = true;
+            }
+            // Control plane: answer a heartbeat so the server sees us as live.
+            // Pong is a control frame (bypasses the connected gate).
+            Ok(Event::Ping { nonce }) => {
+                let f = self.client.build_pong(nonce);
+                self.outbound.push(f);
+            }
+            // Closed / Tick / Chat need no app-level reaction here.
             Ok(_) => {}
             Err(ClientError::Server { .. }) => {
                 if self.screen == Screen::Name {
@@ -355,7 +386,7 @@ impl App {
                     self.name_taken = false;
                     if self.name.chars().count() >= 3 {
                         let f = self.client.build_check_name(self.name.clone());
-                        self.outbound.push(f);
+                        self.emit(f);
                     }
                 }
             }
@@ -380,7 +411,7 @@ impl App {
     fn name_key(&mut self, key: &str) {
         if key == "Enter" && self.name.chars().count() >= 3 && !self.name_taken {
             let f = self.client.build_join(self.name.clone(), None);
-            self.outbound.push(f);
+            self.emit(f);
         }
     }
 
@@ -392,7 +423,7 @@ impl App {
                     let msg = self.chat.trim().to_string();
                     if !msg.is_empty() {
                         let f = self.client.build_say(msg);
-                        self.outbound.push(f);
+                        self.emit(f);
                     }
                     self.chat.clear();
                     self.chat_open = false;
@@ -424,7 +455,8 @@ impl App {
             self.spawn_firework(lx, ly);
             self.cooldown = COOLDOWN_FRAMES;
             // Tell the server so it broadcasts to everyone else in the room.
-            self.outbound.push(self.client.build_firework());
+            let f = self.client.build_firework();
+            self.emit(f);
         }
     }
 
@@ -469,7 +501,7 @@ impl App {
         }
         if dx != 0 || dy != 0 {
             let f = self.client.build_move(dx, dy);
-            self.outbound.push(f);
+            self.emit(f);
         }
     }
 
@@ -550,9 +582,28 @@ fn camera(target: f64, view: f64, field: f64) -> f64 {
 mod tests {
     use super::*;
 
+    /// Drive the App past the handshake (server $hello-ack) so app frames flow.
+    /// Returns the negotiated profile's frames drained (the queued $hello).
+    fn connect(app: &mut App) {
+        use csilgen_transport::events::{control, Event as WireEvent, HelloAck, Profile};
+        let payload = HelloAck {
+            v: csilgen_transport::VERSION,
+            profile: Profile::Compact.as_str().to_string(),
+            session: None,
+        }
+        .encode()
+        .unwrap();
+        let ack = WireEvent::verbose(None, control::HELLO_ACK_NAME, payload)
+            .encode(Profile::Verbose)
+            .unwrap();
+        app.receive(&ack);
+        let _ = app.take_outbound(); // drop the queued $hello
+    }
+
     #[test]
     fn name_entry_checks_then_joins() {
         let mut app = App::new(400, 300, 1.0);
+        connect(&mut app);
         app.set_text("abc"); // text flows through the host input
         assert!(!app.take_outbound().is_empty(), "expected a check-name frame at 3 chars");
         app.key_down("Enter", false);
@@ -560,8 +611,20 @@ mod tests {
     }
 
     #[test]
+    fn withholds_app_frames_until_connected() {
+        let mut app = App::new(400, 300, 1.0);
+        app.set_text("abc"); // before the handshake completes
+        for f in app.take_outbound() {
+            // Only the $hello control frame may be queued pre-connection.
+            let ev = csilgen_transport::events::Event::decode(&f, csilgen_transport::events::Profile::Verbose).unwrap();
+            assert_eq!(ev.event.as_deref(), Some("$hello"), "no app frame before $hello-ack");
+        }
+    }
+
+    #[test]
     fn taken_name_blocks_join() {
         let mut app = App::new(400, 300, 1.0);
+        connect(&mut app);
         app.set_text("ada");
         let _ = app.take_outbound();
         app.name_taken = true;
@@ -607,7 +670,10 @@ mod tests {
         // the player-list panel whose scaled min (90*s = 540) exceeded a fixed
         // cap (520) used to panic, poisoning the wasm and freezing the client
         // right after join. Render the play screen at dpr 3 to guard it.
-        use crate::csil::{JoinResponse, Player, Position, RoomState, ServerMessage};
+        use crate::csil::{JoinResponse, Player, Position, RoomState};
+        use csilgen_transport::events::{Event as WireEvent, Profile};
+        // No handshake here, so the client is still on the default verbose
+        // profile — build the "welcome" frame verbose so it decodes.
         let mk = |id: &str, name: &str| Player {
             player_id: id.into(),
             name: name.into(),
@@ -623,8 +689,9 @@ mod tests {
         };
         let mut body = Vec::new();
         ciborium::into_writer(&JoinResponse { player: mk("me", "TodPhone"), room }, &mut body).unwrap();
-        let mut frame = Vec::new();
-        ciborium::into_writer(&ServerMessage { event: "welcome".into(), body }, &mut frame).unwrap();
+        let frame = WireEvent::verbose(None, "welcome", body)
+            .encode(Profile::Verbose)
+            .unwrap();
 
         let mut app = App::new(1080, 2160, 3.0); // dpr 3 → s = 6
         app.receive(&frame);

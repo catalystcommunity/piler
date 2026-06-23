@@ -58,12 +58,11 @@ export interface MoveRequest {
   dy: number;
 }
 
-export interface GetRoomStateRequest {
-  roomId?: RoomID;
-}
-
 export interface SayRequest {
   message: string;
+}
+
+export interface FireworkIntent {
 }
 
 export interface CheckNameRequest {
@@ -86,15 +85,5 @@ export interface FireworkEvent {
 export interface ErrorEvent {
   code: number;
   message: string;
-}
-
-export interface ClientMessage {
-  kind: string;
-  body: Uint8Array;
-}
-
-export interface ServerMessage {
-  event: string;
-  body: Uint8Array;
 }
 

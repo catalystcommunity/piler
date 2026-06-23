@@ -29,6 +29,12 @@ var (
 	// these (via RoomState) to size and draw the field.
 	FieldWidthSub  = getEnvUint("PILER_FIELD_WIDTH_SUB", 48000)
 	FieldHeightSub = getEnvUint("PILER_FIELD_HEIGHT_SUB", 27000)
+
+	// WireProfile selects the CSIL-Events wire profile for post-handshake
+	// frames: "compact" (default; positional ordinal-keyed arrays) or "verbose"
+	// (text-keyed maps, debuggable). The handshake is always verbose; clients
+	// follow the server's choice via the $hello-ack.
+	WireProfile = getEnv("PILER_WIRE_PROFILE", "compact")
 )
 
 // ApplyFlags overrides config from parsed CLI flags (e.g. --db-uri=...).
@@ -56,6 +62,9 @@ func ApplyFlags(flags map[string]string) {
 		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 			FieldHeightSub = n
 		}
+	}
+	if v, ok := flags["wire-profile"]; ok {
+		WireProfile = v
 	}
 }
 

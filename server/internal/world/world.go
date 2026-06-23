@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/catalystcommunity/piler/server/internal/csil"
-	"github.com/catalystcommunity/piler/server/internal/rpc"
+	"github.com/catalystcommunity/piler/server/internal/messages"
 	"github.com/catalystcommunity/piler/server/internal/store"
 )
 
@@ -35,7 +35,7 @@ const (
 // actor is one entity present in the world: a connected player (conn != nil)
 // or a server-driven bot (conn == nil).
 type actor struct {
-	conn   *rpc.Conn
+	conn   *messages.Conn
 	player csil.Player
 
 	// pending, unapplied move intent (player input accumulated since last tick)
@@ -78,7 +78,7 @@ func New(st store.Store, sub, fieldW, fieldH uint64) *World {
 }
 
 // Register wires the message handlers into the dispatcher, keyed by kind.
-func (w *World) Register(d *rpc.Dispatcher) {
+func (w *World) Register(d *messages.Dispatcher) {
 	d.Register("join", w.join)
 	d.Register("move", w.move)
 	d.Register("say", w.say)
@@ -106,14 +106,14 @@ func (w *World) Remove(connID uint64) {
 
 // --- handlers ---
 
-func (w *World) join(ctx context.Context, c *rpc.Conn, body []byte) error {
+func (w *World) join(ctx context.Context, c *messages.Conn, body []byte) error {
 	var req csil.JoinRequest
-	if err := rpc.Decode(body, &req); err != nil {
+	if err := messages.Decode(body, &req); err != nil {
 		return err
 	}
 	name := strings.TrimSpace(req.Name)
 	if n := len([]rune(name)); n < minNameRunes || n > maxNameRunes {
-		return rpc.BadRequest("name must be 3..32 characters")
+		return messages.BadRequest("name must be 3..32 characters")
 	}
 	roomID := defaultRoom
 	if req.RoomId != nil && string(*req.RoomId) != "" {
@@ -121,10 +121,10 @@ func (w *World) join(ctx context.Context, c *rpc.Conn, body []byte) error {
 	}
 	exists, err := w.store.RoomExists(ctx, roomID)
 	if err != nil {
-		return rpc.Internal("room lookup failed")
+		return messages.Internal("room lookup failed")
 	}
 	if !exists {
-		return rpc.BadRequest("unknown room: " + roomID)
+		return messages.BadRequest("unknown room: " + roomID)
 	}
 
 	p := csil.Player{
@@ -137,11 +137,11 @@ func (w *World) join(ctx context.Context, c *rpc.Conn, body []byte) error {
 	w.mu.Lock()
 	if _, joined := w.actors[c.ID]; joined {
 		w.mu.Unlock()
-		return rpc.BadRequest("already joined")
+		return messages.BadRequest("already joined")
 	}
 	if w.nameTakenLocked(name) {
 		w.mu.Unlock()
-		return rpc.BadRequest("name already in use")
+		return messages.BadRequest("name already in use")
 	}
 	w.addLocked(c.ID, &actor{conn: c, player: p})
 	players := w.playersLocked(roomID)
@@ -160,25 +160,25 @@ func (w *World) join(ctx context.Context, c *rpc.Conn, body []byte) error {
 	return nil
 }
 
-func (w *World) move(_ context.Context, c *rpc.Conn, body []byte) error {
+func (w *World) move(_ context.Context, c *messages.Conn, body []byte) error {
 	var req csil.MoveRequest
-	if err := rpc.Decode(body, &req); err != nil {
+	if err := messages.Decode(body, &req); err != nil {
 		return err
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	a := w.actors[c.ID]
 	if a == nil {
-		return rpc.Unauthorized("join a room before moving")
+		return messages.Unauthorized("join a room before moving")
 	}
 	a.pendDx += req.Dx
 	a.pendDy += req.Dy
 	return nil
 }
 
-func (w *World) say(ctx context.Context, c *rpc.Conn, body []byte) error {
+func (w *World) say(ctx context.Context, c *messages.Conn, body []byte) error {
 	var req csil.SayRequest
-	if err := rpc.Decode(body, &req); err != nil {
+	if err := messages.Decode(body, &req); err != nil {
 		return err
 	}
 	msg := strings.TrimSpace(req.Message)
@@ -187,7 +187,7 @@ func (w *World) say(ctx context.Context, c *rpc.Conn, body []byte) error {
 	a := w.actors[c.ID]
 	if a == nil {
 		w.mu.Unlock()
-		return rpc.Unauthorized("join a room before chatting")
+		return messages.Unauthorized("join a room before chatting")
 	}
 	name, pid, roomID := a.player.Name, string(a.player.PlayerId), string(a.player.RoomId)
 	w.mu.Unlock()
@@ -197,7 +197,7 @@ func (w *World) say(ctx context.Context, c *rpc.Conn, body []byte) error {
 		return nil
 	}
 	if r := len([]rune(msg)); r < 1 || r > maxChatRunes {
-		return rpc.BadRequest("message must be 1..500 characters")
+		return messages.BadRequest("message must be 1..500 characters")
 	}
 	cm := csil.ChatMessage{
 		PlayerId: csil.PlayerID(pid),
@@ -213,12 +213,12 @@ func (w *World) say(ctx context.Context, c *rpc.Conn, body []byte) error {
 // firework is an intent (no body): the calling player set off a firework. We
 // broadcast it to everyone else in the room so they render it above that
 // player; the sender already shows its own locally.
-func (w *World) firework(_ context.Context, c *rpc.Conn, _ []byte) error {
+func (w *World) firework(_ context.Context, c *messages.Conn, _ []byte) error {
 	w.mu.Lock()
 	a := w.actors[c.ID]
 	if a == nil {
 		w.mu.Unlock()
-		return rpc.Unauthorized("join a room before setting off fireworks")
+		return messages.Unauthorized("join a room before setting off fireworks")
 	}
 	pid, roomID := string(a.player.PlayerId), string(a.player.RoomId)
 	w.mu.Unlock()
@@ -227,9 +227,9 @@ func (w *World) firework(_ context.Context, c *rpc.Conn, _ []byte) error {
 	return nil
 }
 
-func (w *World) checkName(_ context.Context, c *rpc.Conn, body []byte) error {
+func (w *World) checkName(_ context.Context, c *messages.Conn, body []byte) error {
 	var req csil.CheckNameRequest
-	if err := rpc.Decode(body, &req); err != nil {
+	if err := messages.Decode(body, &req); err != nil {
 		return err
 	}
 	name := strings.TrimSpace(req.Name)
@@ -283,7 +283,7 @@ func (w *World) Tick() {
 		for _, a := range room {
 			players = append(players, a.player)
 		}
-		frame := rpc.EncodeEvent("tick", csil.Tick{Players: players})
+		frame := messages.EncodeEvent("tick", csil.Tick{Players: players})
 		for _, a := range room {
 			if a.conn != nil {
 				a.conn.SendRaw(frame)
@@ -293,7 +293,7 @@ func (w *World) Tick() {
 	}
 
 	for _, ch := range botChats {
-		frame := rpc.EncodeEvent("chat", ch.cm)
+		frame := messages.EncodeEvent("chat", ch.cm)
 		for _, a := range w.rooms[ch.room] {
 			if a.conn != nil {
 				a.conn.SendRaw(frame)
@@ -347,7 +347,7 @@ func (w *World) playersLocked(roomID string) []csil.Player {
 }
 
 func (w *World) broadcastChat(roomID string, cm csil.ChatMessage) {
-	frame := rpc.EncodeEvent("chat", cm)
+	frame := messages.EncodeEvent("chat", cm)
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, a := range w.rooms[roomID] {
@@ -358,7 +358,10 @@ func (w *World) broadcastChat(roomID string, cm csil.ChatMessage) {
 }
 
 func (w *World) broadcastFireworkExcept(roomID string, exceptID uint64, pid string) {
-	frame := rpc.EncodeEvent("firework", csil.FireworkEvent{PlayerId: csil.PlayerID(pid)})
+	// "burst" is the server→client firework broadcast (op 7); the client→server
+	// intent is "firework" (op 6) — separate ops (the sender isn't notified of
+	// its own burst).
+	frame := messages.EncodeEvent("burst", csil.FireworkEvent{PlayerId: csil.PlayerID(pid)})
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for id, a := range w.rooms[roomID] {

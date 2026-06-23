@@ -2,52 +2,66 @@ package transport
 
 import (
 	"context"
-	"encoding/binary"
-	"io"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
 
+	txp "github.com/catalystcommunity/csilgen/transports/go"
+
 	"github.com/catalystcommunity/piler/server/internal/csil"
-	"github.com/catalystcommunity/piler/server/internal/rpc"
+	"github.com/catalystcommunity/piler/server/internal/messages"
 )
 
-// writeFramed sends a 4-byte big-endian length prefix + payload.
-func writeFramed(t *testing.T, w io.Writer, payload []byte) {
+// clientHandshake performs the initiator side of the CSIL-Events handshake over
+// a carrier: send a (verbose) $hello offering both profiles, expect $hello-ack,
+// and return the negotiated profile.
+func clientHandshake(t *testing.T, carrier txp.FrameCarrier) txp.Profile {
 	t.Helper()
-	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(payload)))
-	if _, err := w.Write(hdr[:]); err != nil {
-		t.Fatalf("write header: %v", err)
+	hello, err := txp.Hello{
+		Versions: []uint64{txp.VERSION},
+		Profiles: []string{txp.ProfileCompact.String(), txp.ProfileVerbose.String()},
+	}.Encode()
+	if err != nil {
+		t.Fatalf("encode hello: %v", err)
 	}
-	if _, err := w.Write(payload); err != nil {
-		t.Fatalf("write payload: %v", err)
+	frame, err := txp.NewVerboseEvent(nil, txp.HelloName, hello).Encode(txp.ProfileVerbose)
+	if err != nil {
+		t.Fatalf("encode hello frame: %v", err)
 	}
+	if err := carrier.SendFrame(frame); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	ackFrame, err := carrier.RecvFrame()
+	if err != nil {
+		t.Fatalf("recv ack: %v", err)
+	}
+	ev, err := txp.DecodeEvent(ackFrame, txp.ProfileVerbose)
+	if err != nil {
+		t.Fatalf("decode ack: %v", err)
+	}
+	if ev.Event == nil || *ev.Event != txp.HelloAckName {
+		t.Fatalf("first server frame = %v, want %s", ev.Event, txp.HelloAckName)
+	}
+	ack, err := txp.DecodeHelloAck(ev.Payload)
+	if err != nil {
+		t.Fatalf("decode ack payload: %v", err)
+	}
+	p, ok := txp.ParseProfile(ack.Profile)
+	if !ok {
+		t.Fatalf("unknown negotiated profile %q", ack.Profile)
+	}
+	return p
 }
 
-// readFramed reads one length-prefixed frame.
-func readFramed(t *testing.T, r io.Reader) []byte {
-	t.Helper()
-	var hdr [4]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		t.Fatalf("read header: %v", err)
-	}
-	n := binary.BigEndian.Uint32(hdr[:])
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		t.Fatalf("read payload: %v", err)
-	}
-	return buf
-}
-
-// A length-prefixed CBOR ClientMessage in produces a length-prefixed
-// ServerMessage out — the round trip through the real framing closures.
-func TestTCPFramingRoundTrip(t *testing.T) {
-	d := rpc.New()
-	d.Register("ping", func(_ context.Context, c *rpc.Conn, _ []byte) error {
-		c.PushEvent("pong", csil.NameAvailability{Name: "x", Available: true})
+// A $hello handshake then a "check-name" op produce a "name-availability" event
+// back — the round trip through the real stream carrier + handshake + dispatch,
+// in whatever profile the server negotiated (default compact).
+func TestTCPHandshakeThenRoundTrip(t *testing.T) {
+	d := messages.New()
+	d.Register("check-name", func(_ context.Context, c *messages.Conn, _ []byte) error {
+		c.PushEvent("name-availability", csil.NameAvailability{Name: "x", Available: true})
 		return nil
 	})
 
@@ -56,27 +70,55 @@ func TestTCPFramingRoundTrip(t *testing.T) {
 	defer cancel()
 	go serveTCPConn(ctx, server, d, func(uint64) {})
 
-	msg, err := cbor.Marshal(csil.ClientMessage{Kind: "ping"})
+	_ = client.SetDeadline(time.Now().Add(2 * time.Second))
+	carrier := txp.NewStreamCarrier(client)
+	profile := clientHandshake(t, carrier)
+
+	// Send check-name in the negotiated profile.
+	body, err := cbor.Marshal(csil.CheckNameRequest{Name: "x"})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	_ = client.SetDeadline(time.Now().Add(2 * time.Second))
-	writeFramed(t, client, msg)
-
-	var sm csil.ServerMessage
-	if err := cbor.Unmarshal(readFramed(t, client), &sm); err != nil {
-		t.Fatalf("decode server message: %v", err)
+	checkOp, _ := messages.OutboundOp("name-availability") // op 1; check-name shares it
+	var req txp.Event
+	if profile == txp.ProfileVerbose {
+		req = txp.NewVerboseEvent(nil, "check-name", body)
+	} else {
+		req = txp.NewCompactEvent(messages.WorldServiceOrd, checkOp, body)
 	}
-	if sm.Event != "pong" {
-		t.Fatalf("event = %q, want \"pong\"", sm.Event)
+	reqFrame, err := req.Encode(profile)
+	if err != nil {
+		t.Fatalf("encode req: %v", err)
+	}
+	if err := carrier.SendFrame(reqFrame); err != nil {
+		t.Fatalf("send req: %v", err)
+	}
+
+	respFrame, err := carrier.RecvFrame()
+	if err != nil {
+		t.Fatalf("recv resp: %v", err)
+	}
+	ev, err := txp.DecodeEvent(respFrame, profile)
+	if err != nil {
+		t.Fatalf("decode resp: %v", err)
+	}
+	if profile == txp.ProfileVerbose {
+		if ev.Event == nil || *ev.Event != "name-availability" {
+			t.Fatalf("resp = %v, want name-availability", ev.Event)
+		}
+	} else {
+		want, _ := messages.OutboundOp("name-availability")
+		if ev.OpOrd == nil || *ev.OpOrd != want {
+			t.Fatalf("resp op = %v, want %d (name-availability)", ev.OpOrd, want)
+		}
 	}
 }
 
-// A zero-length frame is out of range: the reader rejects it and the
-// connection is torn down (the socket closes), rather than looping or
-// allocating on attacker-supplied lengths.
+// A zero-length first frame is not a valid $hello: the handshake rejects it and
+// the connection is torn down, rather than looping or allocating on
+// attacker-supplied lengths.
 func TestTCPZeroLengthFrameClosesConn(t *testing.T) {
-	d := rpc.New()
+	d := messages.New()
 	client, server := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -96,6 +138,6 @@ func TestTCPZeroLengthFrameClosesConn(t *testing.T) {
 	select {
 	case <-closed:
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected connection to close on a zero-length frame")
+		t.Fatal("expected connection to close on a zero-length first frame")
 	}
 }

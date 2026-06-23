@@ -17,5 +17,10 @@ crate-type = ["rlib"]
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 ciborium = "0.2"
+# Standardized CSIL transport family (csilgen): the CSIL-Events envelope codec
+# + connection lifecycle. Bring-your-own-carrier, so no socket code is pulled in
+# here — coreclient stays host-agnostic and the host tunnels the bytes. Compiles
+# native and to wasm32.
+csilgen-transport = { git = "https://github.com/catalystcommunity/csilgen", version = "0.1.0" }
 
 [dev-dependencies]

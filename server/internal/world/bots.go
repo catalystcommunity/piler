@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/catalystcommunity/piler/server/internal/csil"
-	"github.com/catalystcommunity/piler/server/internal/rpc"
+	"github.com/catalystcommunity/piler/server/internal/messages"
 )
 
 // Base names for /demo bots, in order. Indices beyond this fall back to
@@ -87,7 +87,7 @@ func (w *World) toggleDemo(roomID string, n int) {
 		n = maxBots
 	}
 	for i := 0; i < n; i++ {
-		id := rpc.NextID()
+		id := messages.NextID()
 		name := w.botNameLocked(i)
 		bx := rand.Int63n(int64(w.fieldW) + 1)
 		by := rand.Int63n(int64(w.fieldH) + 1)

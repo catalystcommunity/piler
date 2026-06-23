@@ -79,10 +79,49 @@ pg_down() {
 }
 
 regen()      { ./csil/regenerate.sh; }
+# Build the WASM client into webclient/web/wasm (gitignored — never committed).
+#
+# `cargo` alone only emits a raw .wasm; the JS bindings the host imports
+# (web/wasm/piler.js + piler_bg.wasm) are produced by wasm-bindgen. So this needs
+# the wasm32 target and the wasm-bindgen CLI (or wasm-pack, which wraps both).
 build_wasm() {
-    command -v wasm-pack >/dev/null || { echo "wasm-pack not found (cargo install wasm-pack)" >&2; exit 1; }
-    say "building WASM client → webclient/web/wasm"
-    wasm-pack build webclient --target web --out-dir web/wasm --out-name piler
+    local out="webclient/web/wasm"
+    # wasm-bindgen-cli must match the wasm-bindgen crate version, or it errors.
+    local wb_ver
+    wb_ver="$(awk '/name = "wasm-bindgen"$/{getline; gsub(/[",]/,"",$3); print $3; exit}' Cargo.lock)"
+
+    # Shortcut: wasm-pack does cargo build + wasm-bindgen (+ wasm-opt) in one step.
+    if command -v wasm-pack >/dev/null; then
+        say "building WASM client (wasm-pack) → $out"
+        wasm-pack build webclient --target web --out-dir web/wasm --out-name piler
+        return
+    fi
+
+    # Fallback: cargo + wasm-bindgen directly.
+    if ! rustc --print target-list 2>/dev/null | grep -qx wasm32-unknown-unknown; then
+        echo "ERROR: rustc doesn't know the wasm32-unknown-unknown target." >&2
+        echo "  Install it (rustup):  rustup target add wasm32-unknown-unknown" >&2
+        echo "  (Arch system rust ships it; otherwise use rustup.)" >&2
+        exit 1
+    fi
+    if ! command -v wasm-bindgen >/dev/null; then
+        echo "ERROR: wasm-bindgen CLI not found (needed to generate the JS bindings;" >&2
+        echo "       cargo alone only emits a raw .wasm with no JS glue)." >&2
+        echo "  Install the matching version:  cargo install wasm-bindgen-cli --version ${wb_ver:-0.2}" >&2
+        echo "  (or install wasm-pack:         cargo install wasm-pack)" >&2
+        exit 1
+    fi
+
+    say "building WASM client (cargo + wasm-bindgen ${wb_ver:-?}) → $out"
+    cargo build --release --target wasm32-unknown-unknown -p piler-webclient
+    wasm-bindgen target/wasm32-unknown-unknown/release/piler_webclient.wasm \
+        --target web --out-dir "$out" --out-name piler
+
+    # Optional size optimization if wasm-opt is present.
+    if command -v wasm-opt >/dev/null; then
+        say "optimizing $out/piler_bg.wasm (wasm-opt)"
+        wasm-opt -Oz "$out/piler_bg.wasm" -o "$out/piler_bg.wasm"
+    fi
 }
 migrate() { say "running migrations"; ( cd server && go run . migrate ); }
 smoke()   { ( cd server && go run . smoke ); }

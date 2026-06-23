@@ -62,14 +62,12 @@ pub struct MoveRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct GetRoomStateRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub room_id: Option<RoomID>,
+pub struct SayRequest {
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SayRequest {
-    pub message: String,
+pub struct FireworkIntent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -97,19 +95,5 @@ pub struct FireworkEvent {
 pub struct ErrorEvent {
     pub code: i64,
     pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ClientMessage {
-    pub kind: String,
-    #[serde(with = "serde_bytes")]
-    pub body: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ServerMessage {
-    pub event: String,
-    #[serde(with = "serde_bytes")]
-    pub body: Vec<u8>,
 }
 

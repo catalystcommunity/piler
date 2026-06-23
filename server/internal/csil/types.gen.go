@@ -64,14 +64,13 @@ type MoveRequest struct {
 	Dy int64 `json:"dy" yaml:"dy" cbor:"dy"`
 }
 
-// GetRoomStateRequest represents a structured data type
-type GetRoomStateRequest struct {
-	RoomId *RoomID `json:"room_id,omitempty" yaml:"room_id,omitempty" cbor:"room_id,omitempty"`
-}
-
 // SayRequest represents a structured data type
 type SayRequest struct {
 	Message string `json:"message" yaml:"message" cbor:"message"`
+}
+
+// FireworkIntent represents a structured data type
+type FireworkIntent struct {
 }
 
 // CheckNameRequest represents a structured data type
@@ -99,16 +98,4 @@ type FireworkEvent struct {
 type ErrorEvent struct {
 	Code    int64  `json:"code" yaml:"code" cbor:"code"`
 	Message string `json:"message" yaml:"message" cbor:"message"`
-}
-
-// ClientMessage represents a structured data type
-type ClientMessage struct {
-	Kind string `json:"kind" yaml:"kind" cbor:"kind"`
-	Body []byte `json:"body" yaml:"body" cbor:"body"`
-}
-
-// ServerMessage represents a structured data type
-type ServerMessage struct {
-	Event string `json:"event" yaml:"event" cbor:"event"`
-	Body  []byte `json:"body" yaml:"body" cbor:"body"`
 }

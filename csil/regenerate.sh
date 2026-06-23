@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Regenerate generated code from piler.csil across all three languages.
 #
-#   Go   types/services → server/internal/csil/   (consumed by the server)
-#   Rust types/services → coreclient/src/csil/     (consumed by coreclient)
-#   TS   types          → webclient/web/src/api/   (consumed by the harness)
+#   Go   types → server/internal/csil/   (consumed by the server)
+#   Rust types → coreclient/src/csil/     (consumed by coreclient)
+#   TS   types → webclient/web/src/api/   (consumed by the harness)
+#
+# Types-only on every target: piler hand-routes the CSIL-Events World service by
+# its @wire-id ordinals (server/internal/messages/ops.go, coreclient/src/client.rs),
+# so it does NOT use csilgen's generated router/client — only the shared type
+# definitions. The @wire-id service in piler.csil is the contract's source of
+# truth; the runtime ordinal tables mirror it.
 #
 # Run from anywhere. Generated files are checked in.
 set -euo pipefail
@@ -28,8 +34,10 @@ fi
 csilgen validate --input "$SPEC"
 
 # ---- Go (server) ----
+# Clear stale files so a removed type doesn't linger (e.g. a dropped services file).
 mkdir -p "$GO_OUT"
-csilgen generate --input "$SPEC" --target go --output "$GO_OUT"
+rm -f "$GO_OUT"/*.gen.go
+csilgen generate --input "$SPEC" --target go-typesonly --output "$GO_OUT"
 # csilgen emits `package api`; rename to match the import path.
 for f in "$GO_OUT"/*.gen.go; do
     [ -e "$f" ] || continue
@@ -38,13 +46,11 @@ done
 command -v gofmt >/dev/null && gofmt -w "$GO_OUT" || true
 
 # ---- Rust (coreclient) ----
-# rust-client emits the shared types plus a typed WorldClient over a pluggable
-# Transport (for the future native client). The WASM path is pure message-
-# passing over the generated types. Clear stale files first so a dropped
-# generator output (e.g. services.rs) doesn't linger.
+# Types only: piler hand-routes, so the generated client/router isn't used.
+# Clear stale files first so a dropped generator output doesn't linger.
 mkdir -p "$RUST_OUT"
 rm -f "$RUST_OUT"/*.rs
-csilgen generate --input "$SPEC" --target rust-client --output "$RUST_OUT"
+csilgen generate --input "$SPEC" --target rust-typesonly --output "$RUST_OUT"
 
 # ---- TypeScript types (web harness) ----
 mkdir -p "$TS_OUT"
